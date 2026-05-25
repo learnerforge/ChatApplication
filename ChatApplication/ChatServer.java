@@ -4,70 +4,82 @@ import java.util.*;
 
 public class ChatServer {
 
+    public static final int PORT = 5000;
+
     static Vector<ClientHandler> clients = new Vector<>();
 
-    public static void broadcastMessage(String message) {
-
-        for (ClientHandler client : clients) {
-
-            try {
-                client.dos.writeUTF(message);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-    }
-
-    public static void updateUserList() {
-
-        StringBuilder users = new StringBuilder("USERS:");
-
-        for (ClientHandler client : clients) {
-
-            users.append(client.username).append(",");
-        }
-
-        broadcastMessage(users.toString());
-    }
-
     public static void main(String[] args) {
-
         try {
-
-            ServerSocket serverSocket = new ServerSocket(5000);
-
-            System.out.println("Server Started...");
+            ServerSocket serverSocket = new ServerSocket(PORT);
+            System.out.println("Server started on port " + PORT + "...");
 
             while (true) {
-
                 Socket socket = serverSocket.accept();
+                DataInputStream dis = new DataInputStream(socket.getInputStream());
+                DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
 
-                DataInputStream dis =
-                        new DataInputStream(socket.getInputStream());
+                String username = dis.readUTF().trim();
 
-                DataOutputStream dos =
-                        new DataOutputStream(socket.getOutputStream());
+                // Validate username
+                if (username.isEmpty()) {
+                    dos.writeUTF("ERROR: Username cannot be empty");
+                    socket.close();
+                    continue;
+                }
 
-                String username = dis.readUTF();
+                // Check for duplicate username
+                boolean duplicate = false;
+                for (ClientHandler c : clients) {
+                    if (c.username.equalsIgnoreCase(username)) {
+                        duplicate = true;
+                        break;
+                    }
+                }
 
-                ClientHandler client =
-                        new ClientHandler(socket, username, dis, dos);
+                if (duplicate) {
+                    dos.writeUTF("ERROR: Username '" + username + "' already taken");
+                    socket.close();
+                    continue;
+                }
 
+                // Accept the client
+                dos.writeUTF("ACCEPTED");
+
+                ClientHandler client = new ClientHandler(socket, username, dis, dos);
                 clients.add(client);
-
-                Thread t = new Thread(client);
-
-                t.start();
+                new Thread(client).start();
 
                 broadcastMessage(username + " joined the chat");
-
                 updateUserList();
-
                 System.out.println(username + " connected");
             }
 
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    public static void broadcastMessage(String message) {
+        synchronized (clients) {
+            Iterator<ClientHandler> it = clients.iterator();
+            while (it.hasNext()) {
+                ClientHandler client = it.next();
+                try {
+                    client.dos.writeUTF(message);
+                } catch (Exception e) {
+                    it.remove();
+                }
+            }
+        }
+    }
+
+    public static void updateUserList() {
+        StringBuilder users = new StringBuilder("USERS:");
+        synchronized (clients) {
+            for (ClientHandler client : clients) {
+                users.append(client.username).append(",");
+            }
+        }
+        broadcastMessage(users.toString());
     }
 }
