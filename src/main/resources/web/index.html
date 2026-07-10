@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Real-Time Chat</title>
+<style>
+  :root, [data-theme="dark"] {
+    --bg: #121212;
+    --panel: #1E1E1E;
+    --panel-light: #2C2C2C;
+    --border: #333;
+    --text: #eaeaea;
+    --muted: #8a8a8a;
+    --accent: #00AAFF;
+    --accent-hover: #33bbff;
+    --own-bubble: #0a5ea8;
+    --other-bubble: #303030;
+    --private-bubble: #5b3a9e;
+    --system-text: #00C853;
+    --error: #FF5252;
+    --room-active: #00AAFF22;
+    --room-hover: #ffffff0a;
+    --room-sidebar-bg: #161616;
+    --typing-color: #00C853;
+    --seen-color: #00AAFF;
+    --toggle-bg: #333;
+    --toggle-knob: #eaeaea;
+    --shadow: rgba(0,0,0,.4);
+  }
+  [data-theme="light"] {
+    --bg: #f5f5f5;
+    --panel: #ffffff;
+    --panel-light: #f0f0f0;
+    --border: #ddd;
+    --text: #1a1a1a;
+    --muted: #666;
+    --accent: #0088dd;
+    --accent-hover: #006bb3;
+    --own-bubble: #0088dd;
+    --other-bubble: #e8e8e8;
+    --private-bubble: #7c4dff;
+    --system-text: #2e7d32;
+    --error: #d32f2f;
+    --room-active: #0088dd18;
+    --room-hover: #00000008;
+    --room-sidebar-bg: #f0f0f0;
+    --typing-color: #2e7d32;
+    --seen-color: #0088dd;
+    --toggle-bg: #ccc;
+    --toggle-knob: #fff;
+    --shadow: rgba(0,0,0,.1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", Inter, -apple-system, Roboto, Arial, sans-serif;
+    background: var(--bg); color: var(--text);
+    height: 100vh; display: flex; overflow: hidden;
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  /* ── Login ── */
+  #loginScreen {
+    margin: auto; width: 340px; padding: 32px;
+    background: var(--panel); border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 32px var(--shadow);
+  }
+  #loginScreen h1 { font-size: 20px; margin-bottom: 2px; }
+  #loginSubtitle { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+
+  /* Auth tabs */
+  .auth-tabs {
+    display: flex; gap: 0; margin-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .auth-tab {
+    flex: 1; padding: 10px; border: none; background: transparent;
+    color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer;
+    border-bottom: 2px solid transparent; transition: all .15s;
+  }
+  .auth-tab:hover { color: var(--text); }
+  .auth-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* Auth forms */
+  .auth-form label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); display: block; margin: 12px 0 5px;
+  }
+  .auth-form input[type="text"],
+  .auth-form input[type="password"] {
+    width: 100%; padding: 10px 12px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--panel-light);
+    color: var(--text); font-size: 14px; outline: none; transition: border .15s;
+    box-sizing: border-box;
+  }
+  .auth-form input:focus { border-color: var(--accent); }
+
+  .remember-row {
+    display: flex; align-items: center; margin-top: 12px;
+  }
+  .remember-label {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    font-size: 12px; color: var(--muted); user-select: none;
+    margin: 0 !important; text-transform: none !important; letter-spacing: normal !important;
+  }
+  .remember-label input[type="checkbox"] {
+    width: auto; accent-color: var(--accent);
+  }
+  .remember-label:hover { color: var(--text); }
+
+  .auth-form button,
+  #loginScreen button[type="button"] {
+    width: 100%; margin-top: 16px; padding: 11px; border: none;
+    border-radius: var(--radius-sm); background: var(--accent);
+    color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: background .15s, transform .1s;
+  }
+  .auth-form button:hover { background: var(--accent-hover); }
+  .auth-form button:active { transform: scale(.98); }
+  .auth-form button:disabled { opacity: .5; cursor: not-allowed; }
+  #loginError { color: var(--error); font-size: 12px; margin-top: 10px; min-height: 16px; }
+
+  /* ── App ── */
+  #app { display: none; flex-direction: column; width: 100%; height: 100%; }
+
+  /* ── Top bar ── */
+  #topBar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 18px; background: var(--panel);
+    border-bottom: 1px solid var(--border); min-height: 46px;
+  }
+  #topBar .title { font-weight: 600; font-size: 15px; }
+  #status { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
+  #statusDot { width: 8px; height: 8px; border-radius: 50%; background: var(--error); transition: background .3s; }
+  #statusDot.connected { background: var(--system-text); }
+
+  /* ── Main layout ── */
+  #main { flex: 1; display: flex; overflow: hidden; }
+
+  /* ── Room sidebar (left) ── */
+  #roomSidebar {
+    width: 200px; background: var(--room-sidebar-bg); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; padding: 0;
+  }
+  #roomSidebar .section-header {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); padding: 16px 16px 8px; font-weight: 600;
+  }
+  .room-item {
+    padding: 9px 16px; font-size: 13px; display: flex; align-items: center;
+    gap: 9px; cursor: pointer; transition: background .12s; border-radius: 0;
+    color: var(--muted);
+  }
+  .room-item:hover { background: var(--room-hover); color: var(--text); }
+  .room-item.active {
+    background: var(--room-active); color: var(--accent); font-weight: 600;
+    border-right: 3px solid var(--accent);
+  }
+  .room-icon { font-size: 16px; width: 22px; text-align: center; flex-shrink: 0; }
+  .room-info { flex: 1; min-width: 0; }
+  .room-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .room-count {
+    font-size: 11px; color: var(--muted); font-weight: 400;
+    margin-left: auto; flex-shrink: 0;
+  }
+
+  /* ── Chat column ── */
+  #chatArea { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  #chatHeader {
+    padding: 12px 18px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  #chatHeader .room-title { font-weight: 600; font-size: 15px; }
+  #chatHeader .room-desc { font-size: 12px; color: var(--muted); }
+
+  #messages { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 4px; }
+
+  /* ── Bubbles ── */
+  .bubble-row { display: flex; animation: fadeUp .18s ease-out; }
+  .bubble-row.own { justify-content: flex-end; }
+  .bubble {
+    max-width: 62%; padding: 9px 14px; border-radius: var(--radius-bubble);
+    font-size: 14px; line-height: 1.45; word-wrap: break-word;
+    position: relative; transition: background .12s;
+  }
+  .bubble:hover { filter: brightness(1.08); }
+  .bubble .sender { font-size: 11px; font-weight: 700; opacity: .85; display: block; margin-bottom: 2px; }
+  .bubble .time { font-size: 10px; opacity: .55; display: block; margin-top: 4px; text-align: right; }
+  .bubble .msg-status { font-size: 10px; margin-top: 2px; text-align: right; }
+  .bubble .msg-status.delivered { color: var(--muted); }
+  .bubble .msg-status.seen { color: var(--seen-color); }
+  .bubble.own     { background: var(--own-bubble);    border-bottom-right-radius: 3px; }
+  .bubble.other   { background: var(--other-bubble);  border-bottom-left-radius: 3px; }
+  .bubble.private { background: var(--private-bubble); border-bottom-left-radius: 3px; }
+  .system-msg { text-align: center; color: var(--system-text); font-size: 12px; margin: 6px 0; }
+  .error-msg  { text-align: center; color: var(--error);      font-size: 12px; margin: 6px 0; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ── Typing indicator ── */
+  #typingBar {
+    padding: 2px 18px; font-size: 12px; color: var(--typing-color);
+    min-height: 20px; display: flex; align-items: center; gap: 6px;
+  }
+  #typingBar .dots { display: inline-flex; gap: 3px; }
+  #typingBar .dots span {
+    width: 5px; height: 5px; border-radius: 50%; background: var(--typing-color);
+    animation: typingDot 1.2s infinite;
+  }
+  #typingBar .dots span:nth-child(2) { animation-delay: .2s; }
+  #typingBar .dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes typingDot {
+    0%, 60%, 100% { opacity: .3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-3px); }
+  }
+
+  /* ── Hint bar ── */
+  #hint { padding: 0 18px 6px; font-size: 11px; color: var(--muted); }
+
+  /* ── Input bar ── */
+  #inputBar {
+    display: flex; gap: 10px; padding: 12px 18px;
+    background: var(--panel); border-top: 1px solid var(--border);
+  }
+  #messageInput {
+    flex: 1; padding: 10px 16px; border-radius: 22px;
+    border: 1px solid var(--border); background: var(--panel-light);
+    color: var(--text); font-size: 14px; outline: none; transition: border .15s;
+  }
+  #messageInput:focus { border-color: var(--accent); }
+  #messageInput:disabled { opacity: .45; cursor: not-allowed; }
+  #sendBtn {
+    padding: 10px 22px; border-radius: 22px; border: none;
+    background: var(--accent); color: #fff; font-weight: 600;
+    font-size: 14px; cursor: pointer; transition: background .15s, transform .1s;
+  }
+  #sendBtn:hover { background: var(--accent-hover); }
+  #sendBtn:active { transform: scale(.96); }
+  #sendBtn:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ── User sidebar (right) ── */
+  #sidebar {
+    width: 190px; background: var(--panel); border-left: 1px solid var(--border);
+    padding: 16px 0; overflow-y: auto; display: flex; flex-direction: column;
+  }
+  #sidebar h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); padding: 0 16px; margin-bottom: 10px; font-weight: 600;
+  }
+  .user-item {
+    padding: 8px 16px; font-size: 13px; display: flex;
+    align-items: center; gap: 9px; cursor: default; transition: background .12s;
+  }
+  .user-item:hover { background: var(--panel-light); }
+  .user-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--system-text); flex-shrink: 0; }
+  .user-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #onlineCount { font-size: 11px; color: var(--muted); padding: 8px 16px 0; }
+
+  /* ── Theme toggle ── */
+  .theme-toggle {
+    display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+    font-size: 13px; color: var(--muted);
+  }
+  .theme-toggle:hover { color: var(--text); }
+  .toggle-track {
+    width: 40px; height: 22px; border-radius: 11px; background: var(--toggle-bg);
+    position: relative; transition: background .25s;
+  }
+  .toggle-track::after {
+    content: ''; position: absolute; top: 3px; left: 3px;
+    width: 16px; height: 16px; border-radius: 50%; background: var(--toggle-knob);
+    transition: transform .25s, background .25s;
+    box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  }
+  [data-theme="light"] .toggle-track::after {
+    transform: translateX(18px);
+  }
+  .toggle-icon { font-size: 15px; line-height: 1; }
+
+  /* ── Settings button ── */
+  .settings-btn {
+    background: transparent; border: none; font-size: 18px; cursor: pointer;
+    padding: 4px 8px; border-radius: var(--radius-sm); transition: background .15s;
+  }
+  .settings-btn:hover { background: var(--panel-light); }
+
+  /* ── Modal ── */
+  .modal {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,.6); display: flex; align-items: center;
+    justify-content: center; z-index: 1000; backdrop-filter: blur(4px);
+  }
+  .modal-content {
+    background: var(--panel); border-radius: var(--radius); border: 1px solid var(--border);
+    width: 400px; max-height: 80vh; overflow-y: auto; box-shadow: 0 8px 32px var(--shadow);
+  }
+  .modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+  }
+  .modal-header h2 { font-size: 16px; margin: 0; }
+  .modal-close {
+    background: transparent; border: none; font-size: 24px; cursor: pointer;
+    color: var(--muted); transition: color .15s;
+  }
+  .modal-close:hover { color: var(--text); }
+  .modal-body { padding: 20px; }
+
+  .settings-section h3 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  .settings-section input {
+    width: 100%; padding: 10px 12px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border); background: var(--panel-light);
+    color: var(--text); font-size: 13px; outline: none; margin-bottom: 10px;
+    box-sizing: border-box; transition: border .15s;
+  }
+  .settings-section input:focus { border-color: var(--accent); }
+
+  .btn-primary {
+    width: 100%; padding: 10px; border: none; border-radius: var(--radius-sm);
+    background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: background .15s;
+  }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+
+  .btn-secondary {
+    width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: transparent; color: var(--text); font-size: 13px; cursor: pointer;
+    margin-bottom: 8px; transition: background .15s;
+  }
+  .btn-secondary:hover { background: var(--panel-light); }
+
+  .btn-danger {
+    width: 100%; padding: 10px; border: none; border-radius: var(--radius-sm);
+    background: var(--error); color: #fff; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: background .15s;
+  }
+  .btn-danger:hover { background: #ff1744; }
+
+  .settings-divider {
+    height: 1px; background: var(--border); margin: 16px 0;
+  }
+
+  .settings-section.danger { margin-top: 0; }
+
+  .settings-message {
+    padding: 10px 20px; font-size: 12px; text-align: center; min-height: 16px;
+  }
+  .settings-message.success { color: var(--system-text); }
+  .settings-message.error { color: var(--error); }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="loginScreen">
+  <h1>Real-Time Chat</h1>
+  <p id="loginSubtitle">Sign in to continue</p>
+
+  <!-- Tabs -->
+  <div class="auth-tabs">
+    <button class="auth-tab active" data-tab="login">Sign In</button>
+    <button class="auth-tab" data-tab="register">Sign Up</button>
+  </div>
+
+  <!-- Login Form -->
+  <div id="loginForm" class="auth-form">
+    <label for="loginUsername">Username</label>
+    <input id="loginUsername" type="text" placeholder="Enter username" maxlength="20" autocomplete="username">
+    <label for="loginPassword">Password</label>
+    <input id="loginPassword" type="password" placeholder="Enter password" autocomplete="current-password">
+    <div class="remember-row">
+      <label class="remember-label">
+        <input type="checkbox" id="rememberMe" checked>
+        <span>Remember me</span>
+      </label>
+    </div>
+    <button id="loginBtn">Sign In</button>
+  </div>
+
+  <!-- Register Form -->
+  <div id="registerForm" class="auth-form" style="display:none;">
+    <label for="regUsername">Username</label>
+    <input id="regUsername" type="text" placeholder="Choose a username" maxlength="20" autocomplete="username">
+    <label for="regPassword">Password</label>
+    <input id="regPassword" type="password" placeholder="Min. 4 characters" autocomplete="new-password">
+    <label for="regConfirm">Confirm Password</label>
+    <input id="regConfirm" type="password" placeholder="Repeat password" autocomplete="new-password">
+    <button id="registerBtn">Create Account</button>
+  </div>
+
+  <div id="loginError"></div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <div id="topBar">
+    <div class="title" id="titleText">Real-Time Chat</div>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <div class="theme-toggle" id="themeToggle">
+        <span class="toggle-icon" id="themeIcon">🌙</span>
+        <div class="toggle-track"></div>
+      </div>
+      <button class="settings-btn" id="settingsBtn" title="Account Settings">⚙️</button>
+      <div id="status"><span id="statusDot"></span><span id="statusText">Disconnected</span></div>
+    </div>
+  </div>
+  <div id="main">
+    <!-- Room sidebar -->
+    <div id="roomSidebar">
+      <div class="section-header">Channels</div>
+      <div id="roomList"></div>
+    </div>
+    <!-- Chat -->
+    <div id="chatArea">
+      <div id="chatHeader">
+        <span class="room-title" id="currentRoomTitle"># General</span>
+        <span class="room-desc" id="currentRoomDesc">General discussion</span>
+      </div>
+      <div id="messages"></div>
+      <div id="typingBar"></div>
+      <div id="hint">Tip: send a private message with <code>@username your message</code> &bull; Switch rooms with <code>/join RoomName</code></div>
+      <div id="inputBar">
+        <input id="messageInput" type="text" placeholder="Type a message..." disabled>
+        <button id="sendBtn" disabled>Send</button>
+      </div>
+    </div>
+    <!-- Users -->
+    <div id="sidebar">
+      <h2>Online Users</h2>
+      <div id="onlineCount"></div>
+      <div id="userList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settingsModal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2>Account Settings</h2>
+      <button class="modal-close" id="closeSettings">&times;</button>
+    </div>
+    <div class="modal-body">
+      <!-- Change Username -->
+      <div class="settings-section">
+        <h3>Change Username</h3>
+        <input id="newUsername" type="text" placeholder="New username" maxlength="20">
+        <input id="usernamePassword" type="password" placeholder="Current password">
+        <button id="changeUsernameBtn" class="btn-primary">Update Username</button>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Change Password -->
+      <div class="settings-section">
+        <h3>Change Password</h3>
+        <input id="oldPassword" type="password" placeholder="Current password">
+        <input id="newPassword" type="password" placeholder="New password (min 4 chars)">
+        <button id="changePasswordBtn" class="btn-primary">Update Password</button>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Danger Zone -->
+      <div class="settings-section danger">
+        <h3>Danger Zone</h3>
+        <button id="clearMyMessagesBtn" class="btn-secondary">Delete My Messages</button>
+        <button id="clearRoomBtn" class="btn-secondary">Clear Room Chat History</button>
+        <button id="logoutBtn" class="btn-secondary">Logout</button>
+        <button id="deleteAccountBtn" class="btn-danger">Delete Account</button>
+      </div>
+    </div>
+    <div id="settingsMessage" class="settings-message"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  let socket = null;
+  let username = "";
+  let currentRoom = "General";
+  let typingTimeout = null;
+  let isTyping = false;
+  const typingUsers = new Set();
+  const pendingMessages = new Map(); // msgId -> { el, status }
+
+  const $ = id => document.getElementById(id);
+  const loginScreen = $('loginScreen'), app = $('app'), loginError = $('loginError');
+  const messagesEl = $('messages');
+  const messageInput = $('messageInput'), sendBtn = $('sendBtn');
+  const userListEl = $('userList'), onlineCount = $('onlineCount');
+  const statusDot = $('statusDot'), statusText = $('statusText'), titleText = $('titleText');
+  const roomListEl = $('roomList'), typingBar = $('typingBar');
+  const currentRoomTitle = $('currentRoomTitle'), currentRoomDesc = $('currentRoomDesc');
+
+  const ROOM_DESCS = {
+    'General': 'General discussion',
+    'Programming': 'Code, algorithms, and tech talk',
+    'Gaming': 'Games and entertainment',
+    'Music': 'Share and discuss music'
+  };
+
+  // ── Auth tabs ──
+  document.querySelectorAll('.auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      const isLogin = tab.dataset.tab === 'login';
+      $('loginForm').style.display = isLogin ? 'block' : 'none';
+      $('registerForm').style.display = isLogin ? 'none' : 'block';
+      $('loginSubtitle').textContent = isLogin ? 'Sign in to continue' : 'Create a new account';
+      loginError.textContent = '';
+    });
+  });
+
+  // ── Remember Me on page load ──
+  const savedToken = localStorage.getItem('chatRememberToken');
+  const savedUsername = localStorage.getItem('chatUsername');
+  if (savedToken && savedUsername) {
+    $('loginSubtitle').textContent = 'Signing in as ' + savedUsername + '...';
+    autoLogin(savedToken);
+  }
+
+  // ── Login button ──
+  $('loginBtn').addEventListener('click', doLogin);
+  $('loginPassword').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+  $('loginUsername').addEventListener('keydown', e => { if (e.key === 'Enter') $('loginPassword').focus(); });
+
+  // ── Register button ──
+  $('registerBtn').addEventListener('click', doRegister);
+  $('regConfirm').addEventListener('keydown', e => { if (e.key === 'Enter') doRegister(); });
+
+  function doLogin() {
+    const name = $('loginUsername').value.trim();
+    const pass = $('loginPassword').value;
+    if (!name) { loginError.textContent = 'Please enter a username.'; return; }
+    if (!pass) { loginError.textContent = 'Please enter a password.'; return; }
+    loginError.textContent = '';
+    $('loginBtn').disabled = true;
+    $('loginBtn').textContent = 'Signing in...';
+    connect('AUTH:LOGIN:' + name + ':' + pass, name);
+  }
+
+  function doRegister() {
+    const name = $('regUsername').value.trim();
+    const pass = $('regPassword').value;
+    const confirm = $('regConfirm').value;
+    if (!name) { loginError.textContent = 'Please enter a username.'; return; }
+    if (pass.length < 4) { loginError.textContent = 'Password must be at least 4 characters.'; return; }
+    if (pass !== confirm) { loginError.textContent = 'Passwords do not match.'; return; }
+    loginError.textContent = '';
+    $('registerBtn').disabled = true;
+    $('registerBtn').textContent = 'Creating account...';
+    connect('AUTH:REGISTER:' + name + ':' + pass, name);
+  }
+
+  function autoLogin(token) {
+    connect('AUTH:TOKEN:' + token, savedUsername || '');
+  }
+
+  function connect(authMsg, name) {
+    const host = location.hostname || 'localhost';
+    const port = location.port || '5000';
+    username = name;
+    socket = new WebSocket('ws://' + host + ':' + port);
+    socket.onopen = () => socket.send(authMsg);
+    let authComplete = false;
+    socket.onmessage = e => {
+      const msg = e.data;
+      if (!authComplete) {
+        if (msg.startsWith('AUTH:SUCCESS:')) {
+          authComplete = true;
+          const token = msg.substring(12);
+          // Store remember token if checkbox is checked
+          const rememberChecked = $('rememberMe') && $('rememberMe').checked;
+          if (rememberChecked && token) {
+            localStorage.setItem('chatRememberToken', token);
+            localStorage.setItem('chatUsername', username);
+          }
+          resetAuthUI();
+          showApp();
+        } else if (msg.startsWith('AUTH:ERROR:')) {
+          loginError.textContent = msg.substring(11);
+          resetAuthUI();
+          socket.close();
+          // Clear any saved token on auth error
+          localStorage.removeItem('chatRememberToken');
+          localStorage.removeItem('chatUsername');
+        } else if (msg === 'ACCEPTED') {
+          // Legacy fallback
+          authComplete = true;
+          resetAuthUI();
+          showApp();
+        } else if (msg.startsWith('ERROR:')) {
+          loginError.textContent = msg.substring(6);
+          resetAuthUI();
+          socket.close();
+        }
+        return;
+      }
+      handleIncoming(msg);
+    };
+    socket.onclose = () => {
+      setStatus(false);
+      if (authComplete) {
+        appendSystem('Disconnected from server', true);
+        messageInput.disabled = true; sendBtn.disabled = true;
+        typingBar.textContent = '';
+      }
+    };
+    socket.onerror = () => {
+      loginError.textContent = 'Could not reach ' + host + ':' + port;
+      resetAuthUI();
+    };
+  }
+
+  function resetAuthUI() {
+    $('loginBtn').disabled = false;
+    $('loginBtn').textContent = 'Sign In';
+    $('registerBtn').disabled = false;
+    $('registerBtn').textContent = 'Create Account';
+  }
+
+  function showApp() {
+    loginScreen.style.display = 'none';
+    app.style.display = 'flex';
+    titleText.textContent = 'Real-Time Chat — ' + username;
+    setStatus(true);
+    messageInput.disabled = false; sendBtn.disabled = false;
+    messageInput.focus();
+    send('/rooms');
+  }
+
+  function setStatus(connected) {
+    statusDot.classList.toggle('connected', connected);
+    statusText.textContent = connected ? 'Connected' : 'Disconnected';
+  }
+
+  // ── Incoming message routing ──
+  function handleIncoming(msg) {
+    // Room list update
+    if (msg.startsWith('ROOMS:')) { updateRoomList(msg.substring(6)); return; }
+    // Room switch confirmation
+    if (msg.startsWith('ROOM:')) {
+      const room = msg.substring(5);
+      setActiveRoom(room);
+      messagesEl.innerHTML = '';
+      return;
+    }
+    // User list
+    if (msg.startsWith('USERS:')) { updateUserList(msg.substring(6)); return; }
+    // Typing
+    if (msg.startsWith('TYPING:')) { showTyping(msg.substring(7)); return; }
+    if (msg.startsWith('TYPING_STOP:')) { hideTyping(msg.substring(12)); return; }
+    // Message ID
+    if (msg.startsWith('MSG_ID:')) { trackMessage(msg.substring(7)); return; }
+    // Seen
+    if (msg.startsWith('SEEN:')) { handleSeen(msg.substring(5)); return; }
+
+    // ── Account responses ──
+    if (msg.startsWith('ACCT:SUCCESS:')) {
+      showSettingsMsg(msg.substring(13), false);
+      appendSystem(msg.substring(13), false);
+      return;
+    }
+    if (msg.startsWith('ACCT:ERROR:')) {
+      showSettingsMsg(msg.substring(11), true);
+      appendSystem(msg.substring(11), true);
+      return;
+    }
+    if (msg.startsWith('ACCT:USERNAME_CHANGED:')) {
+      const newName = msg.substring(21);
+      username = newName;
+      titleText.textContent = 'Real-Time Chat — ' + username;
+      showSettingsMsg('Username changed to ' + newName, false);
+      appendSystem('You are now known as ' + newName, false);
+      return;
+    }
+    if (msg === 'ACCT:ACCOUNT_DELETED') {
+      localStorage.removeItem('chatRememberToken');
+      localStorage.removeItem('chatUsername');
+      appendSystem('Account deleted', true);
+      setTimeout(() => { location.reload(); }, 1000);
+      return;
+    }
+    if (msg.startsWith('LOGOUT:')) {
+      return; // Handled by reload
+    }
+
+    // System messages
+    if (msg.endsWith('joined the chat') || msg.endsWith('left the chat')) { appendSystem(msg, false); return; }
+    // is now known as
+    if (msg.includes(' is now known as ')) { appendSystem(msg, false); return; }
+    // Private
+    if (msg.startsWith('[PRIVATE')) { appendBubble(msg, 'private', null, null); return; }
+    // Errors
+    if (msg.startsWith('Usage:') || msg.startsWith('Cannot send') || msg.startsWith("User '") || msg.startsWith('Unknown command')) {
+      appendSystem(msg, true); return;
+    }
+    if (msg.startsWith('You are already')) { appendSystem(msg, false); return; }
+
+    // Public message: [10:45 PM] Sai: Hello
+    const match = msg.match(/^\[(.+?)\]\s(.+?):\s([\s\S]*)$/);
+    if (match) {
+      const [, time, sender, content] = match;
+      appendBubble(content, sender === username ? 'own' : 'other', sender, time);
+    } else {
+      appendSystem(msg, false);
+    }
+  }
+
+  // ── Room management ──
+  function updateRoomList(csv) {
+    roomListEl.innerHTML = '';
+    csv.split('|').forEach(entry => {
+      const [name, count] = entry.split(':');
+      if (!name) return;
+      const item = document.createElement('div');
+      item.className = 'room-item' + (name === currentRoom ? ' active' : '');
+      const icons = { General: '💬', Programming: '💻', Gaming: '🎮', Music: '🎵' };
+      item.innerHTML = '<span class="room-icon">' + (icons[name] || '📢') + '</span>'
+        + '<span class="room-info"><span class="room-name">' + esc(name) + '</span></span>'
+        + '<span class="room-count">' + (count || '0') + '</span>';
+      item.addEventListener('click', () => {
+        if (name !== currentRoom) send('/join ' + name);
+      });
+      roomListEl.appendChild(item);
+    });
+  }
+
+  function setActiveRoom(room) {
+    currentRoom = room;
+    currentRoomTitle.textContent = '# ' + room;
+    currentRoomDesc.textContent = ROOM_DESCS[room] || '';
+    document.querySelectorAll('.room-item').forEach(el => {
+      el.classList.toggle('active', el.querySelector('.room-name').textContent === room);
+    });
+    typingBar.textContent = '';
+    typingUsers.clear();
+  }
+
+  // ── User list ──
+  function updateUserList(csv) {
+    userListEl.innerHTML = '';
+    const users = csv.split(',').map(u => u.trim()).filter(Boolean);
+    onlineCount.textContent = users.length + ' user' + (users.length !== 1 ? 's' : '') + ' online';
+    users.forEach(name => {
+      const item = document.createElement('div');
+      item.className = 'user-item';
+      item.innerHTML = '<span class="user-dot"></span><span class="user-name">' + esc(name) + '</span>';
+      userListEl.appendChild(item);
+    });
+  }
+
+  // ── Typing ──
+  function showTyping(user) {
+    typingUsers.add(user);
+    renderTyping();
+  }
+  function hideTyping(user) {
+    typingUsers.delete(user);
+    renderTyping();
+  }
+  function renderTyping() {
+    if (typingUsers.size === 0) { typingBar.innerHTML = ''; return; }
+    const names = [...typingUsers];
+    let text = '';
+    if (names.length === 1) text = names[0] + ' is typing';
+    else if (names.length === 2) text = names[0] + ' and ' + names[1] + ' are typing';
+    else text = names.length + ' people are typing';
+    typingBar.innerHTML = esc(text) + ' <span class="dots"><span></span><span></span><span></span></span>';
+  }
+
+  // ── Message tracking ──
+  function trackMessage(msgId) {
+    // Find the last own bubble we appended and tag it
+    const lastOwn = messagesEl.querySelector('.bubble-row.own:last-child .bubble.own');
+    if (lastOwn) {
+      const statusEl = document.createElement('span');
+      statusEl.className = 'msg-status delivered';
+      statusEl.textContent = '✓';
+      statusEl.dataset.msgId = msgId;
+      lastOwn.appendChild(statusEl);
+      pendingMessages.set(msgId, { el: statusEl, status: 'delivered' });
+    }
+  }
+
+  function handleSeen(parts) {
+    const [msgId] = parts.split(':');
+    const tracked = pendingMessages.get(msgId);
+    if (tracked) {
+      tracked.el.textContent = '✓✓';
+      tracked.el.className = 'msg-status seen';
+      tracked.status = 'seen';
+    }
+  }
+
+  // ── Bubbles ──
+  function appendBubble(content, kind, sender, time) {
+    const row = document.createElement('div');
+    row.className = 'bubble-row' + (kind === 'own' ? ' own' : '');
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble ' + kind;
+    if (sender && kind !== 'own') {
+      const s = document.createElement('span');
+      s.className = 'sender'; s.textContent = sender;
+      bubble.appendChild(s);
+    }
+    const t = document.createElement('span');
+    t.textContent = content; bubble.appendChild(t);
+    if (time) {
+      const ti = document.createElement('span');
+      ti.className = 'time'; ti.textContent = time;
+      bubble.appendChild(ti);
+    }
+    row.appendChild(bubble);
+    messagesEl.appendChild(row);
+    scrollToBottom();
+    return bubble;
+  }
+
+  function appendSystem(text, isError) {
+    const el = document.createElement('div');
+    el.className = isError ? 'error-msg' : 'system-msg';
+    el.textContent = text;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function scrollToBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+  function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+  // ── Send ──
+  function send(text) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(text);
+  }
+
+  function sendMessage() {
+    const text = messageInput.value.trim();
+    if (!text) return;
+    send(text);
+    messageInput.value = '';
+    // Stop typing indicator
+    if (isTyping) { isTyping = false; send('/typing stop'); }
+  }
+
+  // ── Typing detection ──
+  messageInput.addEventListener('input', () => {
+    if (!isTyping && messageInput.value.trim().length > 0) {
+      isTyping = true;
+      send('/typing start');
+    }
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => {
+      if (isTyping) { isTyping = false; send('/typing stop'); }
+    }, 2000);
+  });
+
+  sendBtn.addEventListener('click', sendMessage);
+  messageInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { sendMessage(); e.preventDefault(); }
+  });
+
+  // ── Theme toggle ──
+  const savedTheme = localStorage.getItem('chatTheme') || 'dark';
+  document.documentElement.setAttribute('data-theme', savedTheme);
+  $('themeIcon').textContent = savedTheme === 'dark' ? '🌙' : '☀️';
+
+  $('themeToggle').addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('chatTheme', next);
+    $('themeIcon').textContent = next === 'dark' ? '🌙' : '☀️';
+  });
+
+  // ── Settings modal ──
+  const settingsModal = $('settingsModal');
+  const settingsMsg = $('settingsMessage');
+
+  $('settingsBtn').addEventListener('click', () => {
+    settingsModal.style.display = 'flex';
+    settingsMsg.textContent = '';
+    settingsMsg.className = 'settings-message';
+  });
+
+  $('closeSettings').addEventListener('click', () => {
+    settingsModal.style.display = 'none';
+  });
+
+  settingsModal.addEventListener('click', e => {
+    if (e.target === settingsModal) settingsModal.style.display = 'none';
+  });
+
+  function showSettingsMsg(text, isError) {
+    settingsMsg.textContent = text;
+    settingsMsg.className = 'settings-message ' + (isError ? 'error' : 'success');
+    setTimeout(() => { settingsMsg.textContent = ''; settingsMsg.className = 'settings-message'; }, 4000);
+  }
+
+  $('changeUsernameBtn').addEventListener('click', () => {
+    const newU = $('newUsername').value.trim();
+    const pass = $('usernamePassword').value;
+    if (!newU || !pass) { showSettingsMsg('Fill in all fields', true); return; }
+    send('/changeusername ' + newU + ' ' + pass);
+    $('newUsername').value = '';
+    $('usernamePassword').value = '';
+  });
+
+  $('changePasswordBtn').addEventListener('click', () => {
+    const oldP = $('oldPassword').value;
+    const newP = $('newPassword').value;
+    if (!oldP || !newP) { showSettingsMsg('Fill in all fields', true); return; }
+    send('/changepassword ' + oldP + ' ' + newP);
+    $('oldPassword').value = '';
+    $('newPassword').value = '';
+  });
+
+  $('clearMyMessagesBtn').addEventListener('click', () => {
+    if (confirm('Delete all your messages? This cannot be undone.')) {
+      send('/deletemymessages');
+    }
+  });
+
+  $('clearRoomBtn').addEventListener('click', () => {
+    if (confirm('Clear all messages in #' + currentRoom + '? This cannot be undone.')) {
+      send('/clearroom');
+    }
+  });
+
+  $('logoutBtn').addEventListener('click', () => {
+    localStorage.removeItem('chatRememberToken');
+    localStorage.removeItem('chatUsername');
+    send('/logout');
+    setTimeout(() => { location.reload(); }, 500);
+  });
+
+  $('deleteAccountBtn').addEventListener('click', () => {
+    const pass = prompt('Enter your password to permanently delete your account:');
+    if (pass) {
+      send('/deleteaccount ' + pass);
+    }
+  });
+})();
+</script>
+</body>
+</html>
