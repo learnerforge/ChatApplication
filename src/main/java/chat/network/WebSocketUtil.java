@@ -36,6 +36,14 @@ public final class WebSocketUtil {
      * @return {@code true} if the handshake succeeded
      */
     public static boolean performHandshake(Socket socket) {
+        return performHandshakeWithDetails(socket) != null;
+    }
+
+    /**
+     * Performs handshake and returns details.
+     * @return null if failed, ["WS"] if WebSocket, ["HTTP", path] if HTTP request
+     */
+    public static String[] performHandshakeWithDetails(Socket socket) {
         try {
             BufferedReader reader = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), "UTF-8"));
@@ -43,6 +51,15 @@ public final class WebSocketUtil {
 
             String line;
             String webSocketKey = null;
+            String requestPath = "/";
+
+            // Read the first line for the request path
+            String firstLine = reader.readLine();
+            if (firstLine == null) return null;
+            String[] parts = firstLine.split(" ");
+            if (parts.length >= 2) {
+                requestPath = parts[1];
+            }
 
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
                 if (line.toLowerCase().startsWith("sec-websocket-key:")) {
@@ -51,8 +68,8 @@ public final class WebSocketUtil {
             }
 
             if (webSocketKey == null) {
-                LOG.fine("No Sec-WebSocket-Key header — not a WS upgrade");
-                return false;
+                LOG.fine("No Sec-WebSocket-Key — serving HTTP for: " + requestPath);
+                return new String[]{"HTTP", requestPath};
             }
 
             MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
@@ -67,14 +84,27 @@ public final class WebSocketUtil {
 
             out.write(response.getBytes("UTF-8"));
             out.flush();
-            return true;
+            return new String[]{"WS"};
 
         } catch (NoSuchAlgorithmException e) {
             LOG.log(Level.SEVERE, "SHA-1 not available", e);
-            return false;
+            return null;
         } catch (Exception e) {
             LOG.log(Level.FINE, "WebSocket handshake failed", e);
-            return false;
+            return null;
+        }
+    }
+
+    /**
+     * Load a classpath resource as bytes.
+     */
+    public static byte[] loadResource(String path) {
+        try (InputStream is = WebSocketUtil.class.getResourceAsStream(path)) {
+            if (is == null) return null;
+            return is.readAllBytes();
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Failed to load resource: " + path, e);
+            return null;
         }
     }
 

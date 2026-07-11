@@ -62,7 +62,13 @@ public class ChatServer {
                 Socket socket = serverSocket.accept();
                 socket.setTcpNoDelay(true);
 
-                if (!WebSocketUtil.performHandshake(socket)) {
+                String[] handshakeResult = WebSocketUtil.performHandshakeWithDetails(socket);
+                if (handshakeResult == null) {
+                    socket.close();
+                    continue;
+                }
+                if (handshakeResult[0].equals("HTTP")) {
+                    serveHttpFile(socket, handshakeResult[1]);
                     socket.close();
                     continue;
                 }
@@ -267,15 +273,44 @@ public class ChatServer {
 
     // ── History ─────────────────────────────────────────────
 
+    private static void serveHttpFile(Socket socket, String path) {
+        try {
+            OutputStream out = socket.getOutputStream();
+            if (path.equals("/") || path.equals("/index.html")) {
+                byte[] html = WebSocketUtil.loadResource("/web/index.html");
+                if (html != null) {
+                    String header = "HTTP/1.1 200 OK\r\n"
+                        + "Content-Type: text/html; charset=UTF-8\r\n"
+                        + "Content-Length: " + html.length + "\r\n"
+                        + "Connection: close\r\n\r\n";
+                    out.write(header.getBytes("UTF-8"));
+                    out.write(html);
+                    out.flush();
+                    return;
+                }
+            }
+            String response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            out.write(response.getBytes("UTF-8"));
+            out.flush();
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Failed to serve HTTP", e);
+        }
+    }
+
     private static void sendHistory(OutputStream out, String roomName) {
         try {
             List<Message> history = DatabaseManager.getRecentMessagesByRoom(roomName, Config.HISTORY_LIMIT);
+            java.util.Map<Long, String> reactions = DatabaseManager.getReactionsForRoom(roomName);
             for (Message msg : history) {
                 String formatted;
                 if (msg.isSystem()) {
                     formatted = msg.getContent();
                 } else if (msg.getTarget().isEmpty()) {
-                    formatted = "[" + msg.getTimestamp() + "] " + msg.getSender() + ": " + msg.getContent();
+                    formatted = "[MSGID:" + msg.getId() + "] [" + msg.getTimestamp() + "] " + msg.getSender() + ": " + msg.getContent();
+                    String r = reactions.get(msg.getId());
+                    if (r != null && !r.isEmpty()) {
+                        formatted += " [RX:" + r + "]";
+                    }
                 } else {
                     formatted = "[PRIVATE from " + msg.getSender() + "] " + msg.getContent();
                 }

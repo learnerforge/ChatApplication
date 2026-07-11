@@ -54,10 +54,19 @@ public final class DatabaseManager {
                 + "is_system INTEGER NOT NULL DEFAULT 0,"
                 + "timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);";
 
+        String reactionsTable = "CREATE TABLE IF NOT EXISTS reactions ("
+                + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                + "message_id INTEGER NOT NULL,"
+                + "username TEXT NOT NULL,"
+                + "emoji TEXT NOT NULL,"
+                + "created_at DATETIME DEFAULT CURRENT_TIMESTAMP,"
+                + "UNIQUE(message_id, username, emoji));";
+
         try (Connection conn = connect();
              Statement stmt = conn.createStatement()) {
             stmt.execute(usersTable);
             stmt.execute(messagesTable);
+            stmt.execute(reactionsTable);
 
             // Migration: add room column if missing (for existing databases)
             try {
@@ -81,6 +90,64 @@ public final class DatabaseManager {
         } catch (SQLException e) {
             LOG.log(Level.SEVERE, "Database initialisation failed", e);
         }
+    }
+
+    // ── Message Features ─────────────────────────────────────
+
+    /** Search messages in a room. */
+    public static List<Message> searchMessages(String room, String query, int limit) {
+        List<Message> messages = new ArrayList<>();
+        String sql = "SELECT * FROM messages WHERE room = ? AND content LIKE ? AND is_system = 0 ORDER BY id DESC LIMIT ?";
+        try (Connection conn = connect();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, room);
+            ps.setString(2, "%" + query + "%");
+            ps.setInt(3, limit);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                messages.add(new Message(
+                        rs.getLong("id"),
+                        rs.getString("sender"),
+                        rs.getString("target"),
+                        rs.getString("content"),
+                        rs.getString("timestamp"),
+                        rs.getInt("is_system") == 1
+                ));
+            }
+        } catch (SQLException e) {
+            LOG.log(Level.WARNING, "searchMessages failed", e);
+        }
+        java.util.Collections.reverse(messages);
+        return messages;
+    }
+
+    /** Edit a message. Returns true if the message was owned by the sender and updated. */
+    public static boolean editMessage(long messageId, String sender, String newContent) {
+        String sql = "UPDATE messages SET content = ? WHERE id = ? AND sender = ?";
+        try (Connection conn = connect();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, newContent);
+            ps.setLong(2, messageId);
+            ps.setString(3, sender);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            LOG.log(Level.WARNING, "editMessage failed", e);
+            return false;
+        }
+    }
+
+    /** Get message sender by ID (for ownership checks). */
+    public static String getMessageSender(long messageId) {
+        String sql = "SELECT sender FROM messages WHERE id = ?";
+        try (Connection conn = connect();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, messageId);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) return rs.getString("sender");
+        } catch (SQLException e) {
+            LOG.log(Level.WARNING, "getMessageSender failed", e);
+        }
+        return null;
     }
 
     // ── Password Hashing ─────────────────────────────────────
@@ -471,5 +538,110 @@ public final class DatabaseManager {
             LOG.log(Level.WARNING, "deleteUserMessages failed for " + username, e);
             return 0;
         }
+    }
+
+    // ── Reactions ────────────────────────────────────────────
+
+    /**
+     * Toggle a reaction on a message. Returns the new reaction state.
+     * @return "added" or "removed"
+     */
+    public static String toggleReaction(long messageId, String username, String emoji) {
+        // Check if reaction exists
+        String checkSql = "SELECT id FROM reactions WHERE message_id = ? AND username = ? AND emoji = ?";
+        String insertSql = "INSERT INTO reactions (message_id, username, emoji) VALUES (?, ?, ?)";
+        String deleteSql = "DELETE FROM reactions WHERE message_id = ? AND username = ? AND emoji = ?";
+        try (Connection conn = connect()) {
+            // Check existing
+            PreparedStatement checkPs = conn.prepareStatement(checkSql);
+            checkPs.setLong(1, messageId);
+            checkPs.setString(2, username);
+            checkPs.setString(3, emoji);
+            ResultSet rs = checkPs.executeQuery();
+            if (rs.next()) {
+                // Remove existing reaction
+                PreparedStatement deletePs = conn.prepareStatement(deleteSql);
+                deletePs.setLong(1, messageId);
+                deletePs.setString(2, username);
+                deletePs.setString(3, emoji);
+                deletePs.executeUpdate();
+                return "removed";
+            } else {
+                // Add new reaction
+                PreparedStatement insertPs = conn.prepareStatement(insertSql);
+                insertPs.setLong(1, messageId);
+                insertPs.setString(2, username);
+                insertPs.setString(3, emoji);
+                insertPs.executeUpdate();
+                return "added";
+            }
+        } catch (SQLException e) {
+            LOG.log(Level.WARNING, "toggleReaction failed", e);
+            return "error";
+        }
+    }
+
+    /**
+     * Get all reactions for a message as a formatted string: "emoji1:user1,user2|emoji2:user3"
+     */
+    public static String getReactions(long messageId) {
+        String sql = "SELECT emoji, username FROM reactions WHERE message_id = ? ORDER BY created_at";
+        StringBuilder sb = new StringBuilder();
+        java.util.Map<String, java.util.List<String>> reactionMap = new java.util.LinkedHashMap<>();
+        try (Connection conn = connect();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, messageId);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                String emoji = rs.getString("emoji");
+                String user = rs.getString("username");
+                reactionMap.computeIfAbsent(emoji, k -> new java.util.ArrayList<>()).add(user);
+            }
+        } catch (SQLException e) {
+            LOG.log(Level.WARNING, "getReactions failed", e);
+        }
+        boolean first = true;
+        for (var entry : reactionMap.entrySet()) {
+            if (!first) sb.append("|");
+            sb.append(entry.getKey()).append(":").append(String.join(",", entry.getValue()));
+            first = false;
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Get all reactions for messages in a room (bulk load).
+     * Returns map of messageId -> reactions string.
+     */
+    public static java.util.Map<Long, String> getReactionsForRoom(String room) {
+        java.util.Map<Long, String> result = new java.util.HashMap<>();
+        String sql = "SELECT r.message_id, r.emoji, r.username FROM reactions r "
+                   + "JOIN messages m ON r.message_id = m.id WHERE m.room = ? ORDER BY r.created_at";
+        java.util.Map<Long, java.util.Map<String, java.util.List<String>>> allReactions = new java.util.LinkedHashMap<>();
+        try (Connection conn = connect();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, room);
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                long msgId = rs.getLong("message_id");
+                String emoji = rs.getString("emoji");
+                String user = rs.getString("username");
+                allReactions.computeIfAbsent(msgId, k -> new java.util.LinkedHashMap<>())
+                    .computeIfAbsent(emoji, k -> new java.util.ArrayList<>()).add(user);
+            }
+        } catch (SQLException e) {
+            LOG.log(Level.WARNING, "getReactionsForRoom failed", e);
+        }
+        for (var entry : allReactions.entrySet()) {
+            StringBuilder sb = new StringBuilder();
+            boolean first = true;
+            for (var reactEntry : entry.getValue().entrySet()) {
+                if (!first) sb.append("|");
+                sb.append(reactEntry.getKey()).append(":").append(String.join(",", reactEntry.getValue()));
+                first = false;
+            }
+            result.put(entry.getKey(), sb.toString());
+        }
+        return result;
     }
 }

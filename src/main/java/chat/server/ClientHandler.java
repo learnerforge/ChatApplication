@@ -8,6 +8,8 @@ import java.io.*;
 import java.net.Socket;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -93,7 +95,7 @@ public class ClientHandler implements Runnable {
         // ── Public message in current room ──
         long msgId = ChatServer.nextMessageId();
         String timestamp = new SimpleDateFormat("hh:mm a").format(new Date());
-        String formatted = "[" + timestamp + "] " + username + ": " + message;
+        String formatted = "[MSGID:" + msgId + "] [" + timestamp + "] " + username + ": " + message;
 
         if (currentRoom != null) {
             currentRoom.broadcast(formatted);
@@ -195,6 +197,40 @@ public class ClientHandler implements Runnable {
                 }
                 break;
 
+            // ── Message commands ──
+
+            case "/search":
+                if (parts.length < 2) {
+                    WebSocketUtil.sendText(out, "Usage: /search <query>");
+                    break;
+                }
+                handleSearch(parts[1]);
+                break;
+
+            case "/edit":
+                if (parts.length < 3) {
+                    WebSocketUtil.sendText(out, "Usage: /edit <messageId> <new text>");
+                    break;
+                }
+                handleEditMessage(parts[1], message.substring(message.indexOf(' ', message.indexOf(' ') + 1) + 1));
+                break;
+
+            case "/delmsg":
+                if (parts.length < 2) {
+                    WebSocketUtil.sendText(out, "Usage: /delmsg <messageId>");
+                    break;
+                }
+                handleDeleteMessage(parts[1]);
+                break;
+
+            case "/react":
+                if (parts.length < 3) {
+                    WebSocketUtil.sendText(out, "Usage: /react <messageId> <emoji>");
+                    break;
+                }
+                handleReaction(parts[1], parts[2]);
+                break;
+
             default:
                 WebSocketUtil.sendText(out, "Unknown command: " + cmd);
                 break;
@@ -269,6 +305,79 @@ public class ClientHandler implements Runnable {
         int deleted = DatabaseManager.deleteRoomMessages(currentRoom.getName());
         currentRoom.broadcast("Chat history cleared by " + username);
         WebSocketUtil.sendText(out, "ACCT:SUCCESS:Cleared " + deleted + " messages from " + currentRoom.getName());
+    }
+
+    // ── Message search ──
+
+    private void handleSearch(String query) throws IOException {
+        if (currentRoom == null) return;
+        List<chat.model.Message> results = DatabaseManager.searchMessages(currentRoom.getName(), query, 20);
+        if (results.isEmpty()) {
+            WebSocketUtil.sendText(out, "SEARCH:NONE:No messages found for '" + query + "'");
+            return;
+        }
+        StringBuilder sb = new StringBuilder("SEARCH:RESULTS:");
+        boolean first = true;
+        for (chat.model.Message msg : results) {
+            if (!first) sb.append(";");
+            sb.append(msg.getId()).append("~").append(msg.getSender())
+              .append("~").append(msg.getContent().replace("~", " "))
+              .append("~").append(msg.getTimestamp());
+            first = false;
+        }
+        WebSocketUtil.sendText(out, sb.toString());
+    }
+
+    // ── Edit message ──
+
+    private void handleEditMessage(String msgIdStr, String newContent) throws IOException {
+        try {
+            long msgId = Long.parseLong(msgIdStr.trim());
+            if (DatabaseManager.editMessage(msgId, username, newContent)) {
+                WebSocketUtil.sendText(out, "MSG_EDITED:" + msgId + "~" + newContent);
+                if (currentRoom != null) {
+                    currentRoom.broadcastExcept("MSG_EDITED:" + msgId + "~" + newContent, this);
+                }
+            } else {
+                WebSocketUtil.sendText(out, "ACCT:ERROR:Cannot edit this message (not yours or not found)");
+            }
+        } catch (NumberFormatException e) {
+            WebSocketUtil.sendText(out, "ACCT:ERROR:Invalid message ID");
+        }
+    }
+
+    // ── Delete single message ──
+
+    private void handleDeleteMessage(String msgIdStr) throws IOException {
+        try {
+            long msgId = Long.parseLong(msgIdStr.trim());
+            if (DatabaseManager.deleteMessage(msgId, username)) {
+                WebSocketUtil.sendText(out, "MSG_DELETED:" + msgId);
+                if (currentRoom != null) {
+                    currentRoom.broadcastExcept("MSG_DELETED:" + msgId, this);
+                }
+            } else {
+                WebSocketUtil.sendText(out, "ACCT:ERROR:Cannot delete this message (not yours or not found)");
+            }
+        } catch (NumberFormatException e) {
+            WebSocketUtil.sendText(out, "ACCT:ERROR:Invalid message ID");
+        }
+    }
+
+    // ── Reactions ──
+
+    private void handleReaction(String msgIdStr, String emoji) throws IOException {
+        try {
+            long msgId = Long.parseLong(msgIdStr.trim());
+            String result = DatabaseManager.toggleReaction(msgId, username, emoji);
+            String reactions = DatabaseManager.getReactions(msgId);
+            String reactionMsg = "MSG_REACTION:" + msgId + "~" + reactions;
+            if (currentRoom != null) {
+                currentRoom.broadcast(reactionMsg);
+            }
+        } catch (NumberFormatException e) {
+            WebSocketUtil.sendText(out, "ACCT:ERROR:Invalid message ID");
+        }
     }
 
     // ── Private messages ────────────────────────────────────
@@ -364,12 +473,17 @@ public class ClientHandler implements Runnable {
         try {
             java.util.List<chat.model.Message> history =
                 DatabaseManager.getRecentMessagesByRoom(roomName, 30);
+            Map<Long, String> reactions = DatabaseManager.getReactionsForRoom(roomName);
             for (chat.model.Message msg : history) {
                 String formatted;
                 if (msg.isSystem()) {
                     formatted = msg.getContent();
                 } else if (msg.getTarget().isEmpty()) {
-                    formatted = "[" + msg.getTimestamp() + "] " + msg.getSender() + ": " + msg.getContent();
+                    formatted = "[MSGID:" + msg.getId() + "] [" + msg.getTimestamp() + "] " + msg.getSender() + ": " + msg.getContent();
+                    String r = reactions.get(msg.getId());
+                    if (r != null && !r.isEmpty()) {
+                        formatted += " [RX:" + r + "]";
+                    }
                 } else {
                     formatted = "[PRIVATE from " + msg.getSender() + "] " + msg.getContent();
                 }
