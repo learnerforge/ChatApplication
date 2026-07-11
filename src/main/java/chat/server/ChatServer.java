@@ -7,10 +7,14 @@ import chat.network.WebSocketUtil;
 
 import java.io.*;
 import java.net.*;
+import javax.net.ssl.*;
+import java.security.*;
+import java.security.cert.CertificateException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.*;
+
 
 /**
  * Entry point for the chat server.
@@ -37,6 +41,8 @@ public class ChatServer {
     static final String DEFAULT_ROOM = "General";
 
     private static ServerSocket serverSocket;
+    private static ServerSocket sslServerSocket;
+    private static FileHandler logFileHandler;
 
     // ── Entry point ─────────────────────────────────────────
 
@@ -51,133 +57,200 @@ public class ChatServer {
             LOG.info("Shutdown signal received");
             try { if (serverSocket != null && !serverSocket.isClosed()) serverSocket.close(); }
             catch (IOException ignored) { }
+            try { if (sslServerSocket != null && !sslServerSocket.isClosed()) sslServerSocket.close(); }
+            catch (IOException ignored) { }
+            // Close log file handler to release server.log.lck
+            if (logFileHandler != null) {
+                logFileHandler.flush();
+                logFileHandler.close();
+            }
+            // Shut down all client connections gracefully
+            List<ClientHandler> clients;
+            synchronized (allClients) {
+                clients = new ArrayList<>(allClients);
+            }
+            for (ClientHandler c : clients) {
+                try { c.socket.close(); } catch (IOException ignored) { }
+            }
             LOG.info("Server stopped.");
         }));
 
         try {
+            // Start plain TCP listener
             serverSocket = new ServerSocket(PORT, Config.BACKLOG, InetAddress.getByName(Config.HOST));
-            LOG.info("Server started on " + Config.HOST + ":" + PORT + " — waiting for connections");
+            LOG.info("Plain server started on " + Config.HOST + ":" + PORT);
 
-            while (true) {
-                Socket socket = serverSocket.accept();
-                socket.setTcpNoDelay(true);
-
-                String[] handshakeResult = WebSocketUtil.performHandshakeWithDetails(socket);
-                if (handshakeResult == null) {
-                    socket.close();
-                    continue;
-                }
-                if (handshakeResult[0].equals("HTTP")) {
-                    serveHttpFile(socket, handshakeResult[1]);
-                    socket.close();
-                    continue;
-                }
-
-                InputStream  in  = socket.getInputStream();
-                OutputStream out = socket.getOutputStream();
-
-                // ── Authentication phase ──
-                String authMsg = WebSocketUtil.readText(in);
-                if (authMsg == null) { socket.close(); continue; }
-
-                String[] authParts = authMsg.split(":", 4);
-                if (authParts.length < 2 || !authParts[0].equals("AUTH")) {
-                    WebSocketUtil.sendText(out, "AUTH:ERROR:Invalid authentication message");
-                    socket.close();
-                    continue;
-                }
-
-                String authType = authParts[1];
-                String username = null;
-                String rememberToken = null;
-
-                if (authType.equals("LOGIN") && authParts.length == 4) {
-                    // AUTH:LOGIN:username:password
-                    String loginUsername = authParts[2].trim();
-                    String password = authParts[3];
-                    chat.model.User user = DatabaseManager.loginUser(loginUsername, password);
-                    if (user != null) {
-                        username = user.getUsername();
-                        rememberToken = DatabaseManager.generateRememberToken(username);
-                    } else {
-                        WebSocketUtil.sendText(out, "AUTH:ERROR:Invalid username or password");
-                        socket.close();
-                        continue;
-                    }
-                } else if (authType.equals("REGISTER") && authParts.length == 4) {
-                    // AUTH:REGISTER:username:password
-                    String regUsername = authParts[2].trim();
-                    String password = authParts[3];
-                    if (regUsername.isEmpty()) {
-                        WebSocketUtil.sendText(out, "AUTH:ERROR:Username cannot be empty");
-                        socket.close();
-                        continue;
-                    }
-                    if (password.length() < 4) {
-                        WebSocketUtil.sendText(out, "AUTH:ERROR:Password must be at least 4 characters");
-                        socket.close();
-                        continue;
-                    }
-                    if (DatabaseManager.registerUser(regUsername, password)) {
-                        username = regUsername;
-                        rememberToken = DatabaseManager.generateRememberToken(username);
-                    } else {
-                        WebSocketUtil.sendText(out, "AUTH:ERROR:Username already taken");
-                        socket.close();
-                        continue;
-                    }
-                } else if (authType.equals("TOKEN") && authParts.length >= 3) {
-                    // AUTH:TOKEN:token
-                    String token = authParts[2];
-                    chat.model.User user = DatabaseManager.validateRememberToken(token);
-                    if (user != null) {
-                        username = user.getUsername();
-                        rememberToken = DatabaseManager.generateRememberToken(username);
-                    } else {
-                        WebSocketUtil.sendText(out, "AUTH:ERROR:Invalid or expired token");
-                        socket.close();
-                        continue;
-                    }
-                } else {
-                    WebSocketUtil.sendText(out, "AUTH:ERROR:Invalid authentication format");
-                    socket.close();
-                    continue;
-                }
-
-                if (username == null || username.isEmpty()) {
-                    WebSocketUtil.sendText(out, "AUTH:ERROR:Authentication failed");
-                    socket.close();
-                    continue;
-                }
-
-                if (isDuplicate(username)) {
-                    WebSocketUtil.sendText(out, "AUTH:ERROR:Username '" + username + "' already connected");
-                    socket.close();
-                    continue;
-                }
-
-                WebSocketUtil.sendText(out, "AUTH:SUCCESS:" + rememberToken);
-
-                ClientHandler client = new ClientHandler(socket, username, in, out);
-                allClients.add(client);
-
-                // Assign to default room
-                Room defaultRoom = getOrCreateRoom(DEFAULT_ROOM);
-                client.currentRoom = defaultRoom;
-                defaultRoom.addClient(client);
-
-                new Thread(client, "client-" + username).start();
-
-                DatabaseManager.saveUser(username);
-                sendRoomList(out);
-                sendHistory(out, DEFAULT_ROOM);
-                defaultRoom.broadcast(username + " joined the chat");
-                defaultRoom.updateUserList();
-                LOG.info(username + " joined " + DEFAULT_ROOM + " (online: " + allClients.size() + ")");
+            // Start SSL listener if enabled
+            if (Config.SSL_ENABLED) {
+                startSslListener();
             }
+
+            // Accept connections on the plain socket
+            acceptLoop(serverSocket, false);
 
         } catch (IOException e) {
             LOG.log(Level.SEVERE, "Server error", e);
+        }
+    }
+
+    // ── SSL / TLS ───────────────────────────────────────────
+
+    /** Start the SSL server socket on a separate port. */
+    private static void startSslListener() throws IOException {
+        try {
+            KeyStore ks = KeyStore.getInstance("JKS");
+            char[] ksPass = Config.SSL_KEYSTORE_PASSWORD.toCharArray();
+            try (FileInputStream fis = new FileInputStream(Config.SSL_KEYSTORE)) {
+                ks.load(fis, ksPass);
+            }
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
+            kmf.init(ks, ksPass);
+            SSLContext ctx = SSLContext.getInstance("TLS");
+            ctx.init(kmf.getKeyManagers(), null, null);
+            SSLServerSocketFactory ssf = ctx.getServerSocketFactory();
+            sslServerSocket = ssf.createServerSocket(Config.SSL_PORT, Config.BACKLOG, InetAddress.getByName(Config.HOST));
+            LOG.info("SSL server started on " + Config.HOST + ":" + Config.SSL_PORT);
+
+            // Accept SSL connections in a separate thread
+            new Thread(() -> acceptLoop(sslServerSocket, true), "ssl-accept").start();
+        } catch (KeyStoreException | NoSuchAlgorithmException | CertificateException
+                 | UnrecoverableKeyException | KeyManagementException e) {
+            throw new IOException("Failed to start SSL listener: " + e.getMessage(), e);
+        }
+    }
+
+    /** Accept loop shared between plain and SSL sockets. */
+    private static void acceptLoop(ServerSocket serverSocket, boolean isSsl) {
+        try {
+            while (true) {
+                Socket socket = serverSocket.accept();
+                socket.setTcpNoDelay(true);
+                handleClient(socket);
+            }
+        } catch (IOException e) {
+            LOG.log(Level.FINE, "Accept loop ended (" + (isSsl ? "SSL" : "plain") + ")", e);
+        }
+    }
+
+    /** Handle a single client connection: handshake, auth, dispatch. */
+    private static void handleClient(Socket socket) {
+        try {
+            String[] handshakeResult = WebSocketUtil.performHandshakeWithDetails(socket);
+            if (handshakeResult == null) {
+                socket.close();
+                return;
+            }
+            if (handshakeResult[0].equals("HTTP")) {
+                serveHttpFile(socket, handshakeResult[1]);
+                socket.close();
+                return;
+            }
+
+            InputStream  in  = socket.getInputStream();
+            OutputStream out = socket.getOutputStream();
+
+            // ── Authentication phase ──
+            String authMsg = WebSocketUtil.readText(in);
+            if (authMsg == null) { socket.close(); return; }
+
+            String[] authParts = authMsg.split(":", 4);
+            if (authParts.length < 2 || !authParts[0].equals("AUTH")) {
+                WebSocketUtil.sendText(out, "AUTH:ERROR:Invalid authentication message");
+                socket.close();
+                return;
+            }
+
+            String authType = authParts[1];
+            String username = null;
+            String rememberToken = null;
+
+            if (authType.equals("LOGIN") && authParts.length == 4) {
+                String loginUsername = authParts[2].trim();
+                String password = authParts[3];
+                chat.model.User user = DatabaseManager.loginUser(loginUsername, password);
+                if (user != null) {
+                    username = user.getUsername();
+                    rememberToken = DatabaseManager.generateRememberToken(username);
+                } else {
+                    WebSocketUtil.sendText(out, "AUTH:ERROR:Invalid username or password");
+                    socket.close();
+                    return;
+                }
+            } else if (authType.equals("REGISTER") && authParts.length == 4) {
+                String regUsername = authParts[2].trim();
+                String password = authParts[3];
+                if (regUsername.isEmpty()) {
+                    WebSocketUtil.sendText(out, "AUTH:ERROR:Username cannot be empty");
+                    socket.close();
+                    return;
+                }
+                if (password.length() < 4) {
+                    WebSocketUtil.sendText(out, "AUTH:ERROR:Password must be at least 4 characters");
+                    socket.close();
+                    return;
+                }
+                if (DatabaseManager.registerUser(regUsername, password)) {
+                    username = regUsername;
+                    rememberToken = DatabaseManager.generateRememberToken(username);
+                } else {
+                    WebSocketUtil.sendText(out, "AUTH:ERROR:Username already taken");
+                    socket.close();
+                    return;
+                }
+            } else if (authType.equals("TOKEN") && authParts.length >= 3) {
+                String token = authParts[2];
+                chat.model.User user = DatabaseManager.validateRememberToken(token);
+                if (user != null) {
+                    username = user.getUsername();
+                    rememberToken = DatabaseManager.generateRememberToken(username);
+                } else {
+                    WebSocketUtil.sendText(out, "AUTH:ERROR:Invalid or expired token");
+                    socket.close();
+                    return;
+                }
+            } else {
+                WebSocketUtil.sendText(out, "AUTH:ERROR:Invalid authentication format");
+                socket.close();
+                return;
+            }
+
+            if (username == null || username.isEmpty()) {
+                WebSocketUtil.sendText(out, "AUTH:ERROR:Authentication failed");
+                socket.close();
+                return;
+            }
+
+            if (isDuplicate(username)) {
+                WebSocketUtil.sendText(out, "AUTH:ERROR:Username '" + username + "' already connected");
+                socket.close();
+                return;
+            }
+
+            WebSocketUtil.sendText(out, "AUTH:SUCCESS:" + rememberToken);
+
+            ClientHandler client = new ClientHandler(socket, username, in, out);
+            synchronized (allClients) {
+                allClients.add(client);
+            }
+
+            Room defaultRoom = getOrCreateRoom(DEFAULT_ROOM);
+            client.currentRoom = defaultRoom;
+            defaultRoom.addClient(client);
+
+            new Thread(client, "client-" + username).start();
+
+            DatabaseManager.saveUser(username);
+            sendRoomList(out);
+            sendHistory(out, DEFAULT_ROOM);
+            defaultRoom.broadcast(username + " joined the chat");
+            defaultRoom.updateUserList();
+            synchronized (allClients) {
+                LOG.info(username + " joined " + DEFAULT_ROOM + " (online: " + allClients.size() + ")");
+            }
+
+        } catch (Exception e) {
+            LOG.log(Level.FINE, "Failed to handle client connection", e);
+            try { socket.close(); } catch (IOException ignored) { }
         }
     }
 
@@ -218,11 +291,13 @@ public class ChatServer {
             first = false;
         }
         String msg = sb.toString();
+        List<ClientHandler> clientsSnapshot;
         synchronized (allClients) {
-            for (ClientHandler c : allClients) {
-                try { WebSocketUtil.sendText(c.out, msg); }
-                catch (Exception ignored) { }
-            }
+            clientsSnapshot = new ArrayList<>(allClients);
+        }
+        for (ClientHandler c : clientsSnapshot) {
+            try { WebSocketUtil.sendText(c.out, msg); }
+            catch (Exception ignored) { }
         }
     }
 
@@ -240,7 +315,9 @@ public class ChatServer {
 
     /** Remove a client from everything on disconnect. */
     static void removeClient(ClientHandler handler) {
-        allClients.remove(handler);
+        synchronized (allClients) {
+            allClients.remove(handler);
+        }
         if (handler.currentRoom != null) {
             handler.currentRoom.removeClient(handler);
             handler.currentRoom.updateUserList();
@@ -345,6 +422,7 @@ public class ChatServer {
             fileHandler.setLevel(Level.ALL);
             fileHandler.setFormatter(new SimpleFormatter());
             root.addHandler(fileHandler);
+            logFileHandler = fileHandler;
         } catch (IOException e) {
             LOG.warning("Could not create log file: " + e.getMessage());
         }

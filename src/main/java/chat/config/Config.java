@@ -17,7 +17,7 @@ public final class Config {
     private static final Properties PROPS = new Properties();
 
     static {
-        try (InputStream is = Config.class.getClassLoader().getResourceAsStream("config.properties")) {
+        try (InputStream is = Config.class.getResourceAsStream("/config.properties")) {
             if (is != null) {
                 PROPS.load(is);
                 LOG.info("Loaded config.properties from classpath");
@@ -40,6 +40,12 @@ public final class Config {
 
     // ── History ─────────────────────────────────────────────
     public static final int HISTORY_LIMIT = getInt("history.limit", 50);
+
+    // ── TLS / SSL ───────────────────────────────────────────
+    public static final boolean SSL_ENABLED  = getBoolean("server.ssl.enabled", false);
+    public static final String  SSL_KEYSTORE = getString("server.ssl.keystore", "chatapp.jks");
+    public static final String  SSL_KEYSTORE_PASSWORD = getString("server.ssl.keystore.password", "changeit");
+    public static final int     SSL_PORT     = getInt("server.ssl.port", 5443);
 
     // ── UI (web) ────────────────────────────────────────────
     public static final String APP_NAME = "Real-Time Chat";
@@ -70,11 +76,17 @@ public final class Config {
         }
     }
 
+    private static boolean getBoolean(String key, boolean def) {
+        String val = PROPS.getProperty(key);
+        if (val == null) return def;
+        return Boolean.parseBoolean(val.trim());
+    }
+
     /** Pretty-print the active configuration to the server log. */
     public static String toSummary() {
         return String.format(
-            "Config { port=%d, host='%s', maxClients=%d, db='%s', historyLimit=%d }",
-            PORT, HOST, MAX_CLIENTS, DB_URL, HISTORY_LIMIT
+            "Config { port=%d, host='%s', maxClients=%d, db='%s', historyLimit=%d, ssl=%b, sslPort=%d }",
+            PORT, HOST, MAX_CLIENTS, DB_URL, HISTORY_LIMIT, SSL_ENABLED, SSL_PORT
         );
     }
 }

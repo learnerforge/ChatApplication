@@ -646,8 +646,16 @@
 
   function connect(authMsg, name) {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const portPart = (location.port && location.port !== '80' && location.port !== '443') ? ':' + location.port : '';
-    const host = location.hostname || 'localhost';
+    let host = location.hostname || 'localhost';
+    let portPart = '';
+    // If served through the built-in HTTP server (port 5000/5443), the WS port
+    // matches the page port. If the HTML is opened directly (file://), default
+    // to port 5000 for plain WS.
+    if (location.port && location.port !== '80' && location.port !== '443') {
+      portPart = ':' + location.port;
+    } else if (!location.port && proto === 'ws:') {
+      portPart = ':5000';
+    }
     username = name;
     socket = new WebSocket(proto + '//' + host + portPart);
     socket.onopen = () => socket.send(authMsg);

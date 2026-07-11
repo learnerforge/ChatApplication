@@ -302,19 +302,11 @@ public final class DatabaseManager {
     // ── Legacy User Methods ──────────────────────────────────
 
     public static void saveUser(String username) {
-        // Only save if user doesn't exist (for legacy guest logins)
-        String checkSql = "SELECT COUNT(*) FROM users WHERE username = ?";
         String insertSql = "INSERT OR IGNORE INTO users (username) VALUES (?)";
         try (Connection conn = connect();
-             PreparedStatement checkPs = conn.prepareStatement(checkSql)) {
-            checkPs.setString(1, username);
-            ResultSet rs = checkPs.executeQuery();
-            if (rs.next() && rs.getInt(1) == 0) {
-                try (PreparedStatement insertPs = conn.prepareStatement(insertSql)) {
-                    insertPs.setString(1, username);
-                    insertPs.executeUpdate();
-                }
-            }
+             PreparedStatement ps = conn.prepareStatement(insertSql)) {
+            ps.setString(1, username);
+            ps.executeUpdate();
         } catch (SQLException e) {
             LOG.log(Level.WARNING, "saveUser failed for " + username, e);
         }
@@ -460,9 +452,10 @@ public final class DatabaseManager {
         String updateMessages = "UPDATE messages SET sender = ? WHERE sender = ?";
         try (Connection conn = connect()) {
             conn.setAutoCommit(false);
-            try {
+            try (PreparedStatement checkPs = conn.prepareStatement(checkSql);
+                 PreparedStatement updatePs = conn.prepareStatement(updateSql);
+                 PreparedStatement msgPs = conn.prepareStatement(updateMessages)) {
                 // Check uniqueness
-                PreparedStatement checkPs = conn.prepareStatement(checkSql);
                 checkPs.setString(1, newUsername);
                 ResultSet rs = checkPs.executeQuery();
                 if (rs.next() && rs.getInt(1) > 0) {
@@ -470,12 +463,10 @@ public final class DatabaseManager {
                     return false;
                 }
                 // Update username in users table
-                PreparedStatement updatePs = conn.prepareStatement(updateSql);
                 updatePs.setString(1, newUsername);
                 updatePs.setString(2, oldUsername);
                 updatePs.executeUpdate();
                 // Update username in messages table
-                PreparedStatement msgPs = conn.prepareStatement(updateMessages);
                 msgPs.setString(1, newUsername);
                 msgPs.setString(2, oldUsername);
                 msgPs.executeUpdate();
@@ -551,16 +542,17 @@ public final class DatabaseManager {
         String checkSql = "SELECT id FROM reactions WHERE message_id = ? AND username = ? AND emoji = ?";
         String insertSql = "INSERT INTO reactions (message_id, username, emoji) VALUES (?, ?, ?)";
         String deleteSql = "DELETE FROM reactions WHERE message_id = ? AND username = ? AND emoji = ?";
-        try (Connection conn = connect()) {
+        try (Connection conn = connect();
+             PreparedStatement checkPs = conn.prepareStatement(checkSql);
+             PreparedStatement deletePs = conn.prepareStatement(deleteSql);
+             PreparedStatement insertPs = conn.prepareStatement(insertSql)) {
             // Check existing
-            PreparedStatement checkPs = conn.prepareStatement(checkSql);
             checkPs.setLong(1, messageId);
             checkPs.setString(2, username);
             checkPs.setString(3, emoji);
             ResultSet rs = checkPs.executeQuery();
             if (rs.next()) {
                 // Remove existing reaction
-                PreparedStatement deletePs = conn.prepareStatement(deleteSql);
                 deletePs.setLong(1, messageId);
                 deletePs.setString(2, username);
                 deletePs.setString(3, emoji);
@@ -568,7 +560,6 @@ public final class DatabaseManager {
                 return "removed";
             } else {
                 // Add new reaction
-                PreparedStatement insertPs = conn.prepareStatement(insertSql);
                 insertPs.setLong(1, messageId);
                 insertPs.setString(2, username);
                 insertPs.setString(3, emoji);

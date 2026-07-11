@@ -27,16 +27,20 @@ public class Room {
 
     public String getName()        { return name; }
     public String getDescription() { return description; }
-    public int    getSize()        { return clients.size(); }
+    public int    getSize()        { synchronized (clients) { return clients.size(); } }
 
     /** Add a client to this room. */
     void addClient(ClientHandler handler) {
-        clients.add(handler);
+        synchronized (clients) {
+            clients.add(handler);
+        }
     }
 
     /** Remove a client from this room. */
     void removeClient(ClientHandler handler) {
-        clients.remove(handler);
+        synchronized (clients) {
+            clients.remove(handler);
+        }
     }
 
     /** Broadcast a text message to every client in this room. */

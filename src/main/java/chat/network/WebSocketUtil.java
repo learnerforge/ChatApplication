@@ -30,16 +30,6 @@ public final class WebSocketUtil {
     // ── Handshake ───────────────────────────────────────────
 
     /**
-     * Performs the HTTP 101 WebSocket upgrade handshake.
-     *
-     * @param socket the freshly-accepted TCP socket
-     * @return {@code true} if the handshake succeeded
-     */
-    public static boolean performHandshake(Socket socket) {
-        return performHandshakeWithDetails(socket) != null;
-    }
-
-    /**
      * Performs handshake and returns details.
      * @return null if failed, ["WS"] if WebSocket, ["HTTP", path] if HTTP request
      */
@@ -117,29 +107,34 @@ public final class WebSocketUtil {
      * @param message the text to send
      * @throws IOException if the write fails
      */
-    public static synchronized void sendText(OutputStream out, String message) throws IOException {
+    public static void sendText(OutputStream out, String message) throws IOException {
         byte[] payload = message.getBytes("UTF-8");
         int len = payload.length;
 
-        ByteArrayOutputStream frame = new ByteArrayOutputStream();
-        frame.write(0x81); // FIN + opcode 0x1 (text)
+        // Synchronize on the output stream to prevent interleaving of frames
+        // when multiple threads (e.g. broadcast and direct send) write concurrently.
+        synchronized (out) {
+            byte[] frame = new byte[len + 9]; // header is at most 9 bytes
+            int pos = 0;
+            frame[pos++] = (byte) 0x81; // FIN + opcode 0x1 (text)
 
-        if (len <= 125) {
-            frame.write(len);
-        } else if (len <= 65535) {
-            frame.write(126);
-            frame.write((len >> 8) & 0xFF);
-            frame.write(len & 0xFF);
-        } else {
-            frame.write(127);
-            for (int i = 7; i >= 0; i--) {
-                frame.write((int) (len >> (8 * i)) & 0xFF);
+            if (len <= 125) {
+                frame[pos++] = (byte) len;
+            } else if (len <= 65535) {
+                frame[pos++] = (byte) 126;
+                frame[pos++] = (byte) ((len >> 8) & 0xFF);
+                frame[pos++] = (byte) (len & 0xFF);
+            } else {
+                frame[pos++] = (byte) 127;
+                for (int i = 7; i >= 0; i--) {
+                    frame[pos++] = (byte) ((len >> (8 * i)) & 0xFF);
+                }
             }
-        }
 
-        frame.write(payload);
-        out.write(frame.toByteArray());
-        out.flush();
+            System.arraycopy(payload, 0, frame, pos, len);
+            out.write(frame, 0, pos + len);
+            out.flush();
+        }
     }
 
     // ── Read ────────────────────────────────────────────────
@@ -165,11 +160,11 @@ public final class WebSocketUtil {
         int len = b2 & 0x7F;
 
         if (len == 126) {
-            len = (in.read() << 8) | in.read();
+            len = ((in.read() & 0xFF) << 8) | (in.read() & 0xFF);
         } else if (len == 127) {
             long longLen = 0;
             for (int i = 0; i < 8; i++) {
-                longLen = (longLen << 8) | in.read();
+                longLen = (longLen << 8) | (in.read() & 0xFF);
             }
             len = (int) longLen;
         }

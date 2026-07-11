@@ -1,41 +1,47 @@
-# Real-Time Chat - Web MVP
+# Real-Time Chat Application
 
-## What changed from the Swing version
-- `ChatServer.java` and `ClientHandler.java` - same thread-per-client, `Vector<ClientHandler>`
-  design as before, but now speak the WebSocket protocol instead of `DataInputStream`/`DataOutputStream`.
-- `WebSocketUtil.java` - new helper: does the HTTP → WebSocket handshake and encodes/decodes
-  WebSocket frames, all on top of the same raw `Socket`/`ServerSocket` classes (no external
-  WebSocket library, so Networking + Multithreading are still genuinely front and center).
-- `web/index.html` - replaces `ChatClientGUI.java`. Same dark theme, message bubbles, online
-  users list, private messaging (`@username message`), timestamps, and a connection-status
-  indicator, but running in any browser instead of Swing.
-- `ChatClient.java`, `ChatClientGUI.java` are no longer used - the browser is the new client.
-- `DatabaseManager.java` is untouched (not part of this MVP).
+Multi-client real-time chat using Java Sockets, Multithreading, and WebSocket protocol.
 
-## How to run
+## Build
 
-1. Compile and start the server:
+```
+mvn clean package
+```
+
+## Run (plain WebSocket, no TLS)
+
+```
+java -jar target/chat-application-1.0.0.jar
+```
+
+The server starts on port 5000. Open `src/main/resources/web/index.html` in a browser (double-click or `File > Open`). The HTML connects to the server via WebSocket.
+
+## Run with TLS (for cloudflared HTTPS)
+
+1. Generate a self-signed keystore:
+   - Windows: `.\setup-ssl.ps1`
+   - Linux/Mac: `chmod +x setup-ssl.sh && ./setup-ssl.sh`
+
+2. Set `server.ssl.enabled=true` in `src/main/resources/config.properties`
+
+3. Build and start:
    ```
-   cd ChatApplication
-   javac *.java
-   java ChatServer
+   mvn clean package
+   java -jar target/chat-application-1.0.0.jar
    ```
-   You should see: `Chat server started on port 5000 (WebSocket)...`
 
-2. Open `web/index.html` directly in a browser (double-click it, or open it via `File > Open`).
-   No web server needed for the HTML - it connects out to the Java server over WebSocket.
+4. Configure and run cloudflared:
+   ```
+   cloudflared tunnel --config cloudflared-config.yml run
+   ```
 
-3. On the login screen:
-   - Server address: `localhost` if the browser and server are on the same machine.
-   - For LAN testing (item 11 in your plan), enter the server machine's local IP
-     (e.g. `192.168.1.23`) instead - make sure port 5000 is allowed through the firewall.
-   - Port: `5000` (matches `ChatServer.PORT`).
-   - Enter a username and click **Join Chat**.
+The server listens on both port 5000 (plain) and 5443 (TLS). cloudflared connects to localhost:5443 with `noTLSVerify: true`.
 
-4. Open the same `index.html` in another tab/browser/machine to test multi-client chat.
-
-## Known limits of this MVP (intentionally out of scope for now)
-- No chat history / persistence (server restart clears all state - same as before).
-- No login/password - just a username, same as the original.
-- No file sharing, chat rooms, or encryption yet - these are the "Part 4/5/6" stretch items
-  from your original plan and can be layered on top of this once the web MVP is solid.
+## Features
+- Multi-room chat with /join, /leave
+- Private messaging (@username)
+- Message editing, deletion, reactions
+- Search within room
+- Account management (register, login, change password, change username, delete account)
+- Persistent history via SQLite
+- Dark/light theme toggle

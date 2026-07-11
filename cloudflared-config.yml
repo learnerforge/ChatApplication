@@ -1,0 +1,17 @@
+# cloudflared tunnel configuration
+# Quick start (no tunnel registration needed):
+#   cloudflared tunnel --config cloudflared-config.yml run
+#
+# The --no-tls-verify flag lets cloudflared connect to our self-signed cert.
+tunnel: YOUR_TUNNEL_ID
+credentials-file: C:\Users\YOUR_USER\.cloudflared\YOUR_TUNNEL_ID.json
+
+ingress:
+  # Route HTTPS traffic to the SSL-enabled chat server on port 5443
+  - hostname: chat.yourdomain.com
+    service: https://localhost:5443
+    originRequest:
+      noTLSVerify: true
+
+  # Catch-all: reject all other traffic
+  - service: http_status:404

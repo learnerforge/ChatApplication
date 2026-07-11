@@ -212,7 +212,13 @@ public class ClientHandler implements Runnable {
                     WebSocketUtil.sendText(out, "Usage: /edit <messageId> <new text>");
                     break;
                 }
-                handleEditMessage(parts[1], message.substring(message.indexOf(' ', message.indexOf(' ') + 1) + 1));
+                // parts[0] = "/edit", parts[1] = messageId, the rest is the new text
+                int editSpaceIdx = message.indexOf(' ', message.indexOf(' ') + 1);
+                if (editSpaceIdx > 0) {
+                    handleEditMessage(parts[1], message.substring(editSpaceIdx + 1));
+                } else {
+                    WebSocketUtil.sendText(out, "Usage: /edit <messageId> <new text>");
+                }
                 break;
 
             case "/delmsg":
@@ -445,10 +451,11 @@ public class ClientHandler implements Runnable {
         ConcurrentHashMap<String, Long> roomTyping = typingUsers.get(roomName);
         if (roomTyping != null) {
             roomTyping.remove(username);
+            if (roomTyping.isEmpty()) {
+                typingUsers.remove(roomName, roomTyping);
+            }
         }
-        if (currentRoom != null) {
-            currentRoom.broadcastExcept("TYPING_STOP:" + username, this);
-        }
+        currentRoom.broadcastExcept("TYPING_STOP:" + username, this);
     }
 
     // ── Seen ────────────────────────────────────────────────
